@@ -16,7 +16,21 @@ extension UserDefaults {
     }
 }
 
-// MARK: - Today Statistics
+// MARK: - Day Statistics
+struct DayStats: Codable, Identifiable {
+    var id: String { dateString }
+    let dateString: String  // "yyyy-MM-dd"
+    var toolCalls: Int
+    var sessionsCount: Int
+
+    static var todayString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+}
+
+// MARK: - Today Statistics (backward-compatible wrapper)
 struct TodayStats {
     var toolCalls: Int = 0
     var sessionsCount: Int = 0
@@ -46,8 +60,9 @@ class SessionManager: ObservableObject {
     @Published var sessions: [String: SessionState] = [:]
     @Published var activeSessions: [SessionState] = []
 
-    // 今日统计
+    // 统计
     @Published var todayStats = TodayStats()
+    @Published var weeklyStats: [DayStats] = []
 
     // 用户设置
     @Published var soundEnabled: Bool = true
@@ -85,30 +100,76 @@ class SessionManager: ObservableObject {
         fadeTimer?.invalidate()
     }
 
-    // MARK: - Today Stats Persistence
+    // MARK: - Stats Persistence
     private func loadTodayStats() {
-        let toolCalls = UserDefaults.standard.integer(forKey: "todayToolCalls")
-        let sessionsCount = UserDefaults.standard.integer(forKey: "todaySessionsCount")
-        let lastResetTimestamp = UserDefaults.standard.double(forKey: "todayStatsLastReset")
-
-        let lastReset = lastResetTimestamp > 0 ? Date(timeIntervalSince1970: lastResetTimestamp) : Date()
-
-        todayStats = TodayStats(toolCalls: toolCalls, sessionsCount: sessionsCount, lastReset: lastReset)
-
-        // 检查是否需要重置（新的一天）
-        let calendar = Calendar.current
-        if !calendar.isDateInToday(lastReset) {
-            todayStats.toolCalls = 0
-            todayStats.sessionsCount = 0
-            todayStats.lastReset = Date()
-            saveTodayStats()
+        // 读取 weeklyStats
+        if let data = UserDefaults.standard.data(forKey: "weeklyStats"),
+           let decoded = try? JSONDecoder().decode([DayStats].self, from: data) {
+            weeklyStats = decoded
         }
+
+        // 从旧格式迁移（如果 weeklyStats 为空但旧 key 有数据）
+        if weeklyStats.isEmpty {
+            let oldToolCalls = UserDefaults.standard.integer(forKey: "todayToolCalls")
+            let oldSessions = UserDefaults.standard.integer(forKey: "todaySessionsCount")
+            let oldTimestamp = UserDefaults.standard.double(forKey: "todayStatsLastReset")
+            if oldToolCalls > 0 || oldSessions > 0 {
+                let oldDate = oldTimestamp > 0 ? Date(timeIntervalSince1970: oldTimestamp) : Date()
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd"
+                let dateStr = formatter.string(from: oldDate)
+                weeklyStats = [DayStats(dateString: dateStr, toolCalls: oldToolCalls, sessionsCount: oldSessions)]
+            }
+        }
+
+        // 清理超过 7 天的记录
+        pruneWeeklyStats()
+
+        // 同步 todayStats
+        syncTodayFromWeekly()
     }
 
     private func saveTodayStats() {
+        // 更新 weeklyStats 中今天的条目
+        let today = DayStats.todayString
+        if let idx = weeklyStats.firstIndex(where: { $0.dateString == today }) {
+            weeklyStats[idx] = DayStats(dateString: today, toolCalls: todayStats.toolCalls, sessionsCount: todayStats.sessionsCount)
+        } else {
+            weeklyStats.append(DayStats(dateString: today, toolCalls: todayStats.toolCalls, sessionsCount: todayStats.sessionsCount))
+        }
+
+        pruneWeeklyStats()
+
+        // 持久化 weeklyStats
+        if let data = try? JSONEncoder().encode(weeklyStats) {
+            UserDefaults.standard.set(data, forKey: "weeklyStats")
+        }
+
+        // 向后兼容旧 key
         UserDefaults.standard.set(todayStats.toolCalls, forKey: "todayToolCalls")
         UserDefaults.standard.set(todayStats.sessionsCount, forKey: "todaySessionsCount")
         UserDefaults.standard.set(todayStats.lastReset.timeIntervalSince1970, forKey: "todayStatsLastReset")
+    }
+
+    private func syncTodayFromWeekly() {
+        let today = DayStats.todayString
+        if let todayEntry = weeklyStats.first(where: { $0.dateString == today }) {
+            todayStats = TodayStats(toolCalls: todayEntry.toolCalls, sessionsCount: todayEntry.sessionsCount, lastReset: Date())
+        } else {
+            todayStats = TodayStats(toolCalls: 0, sessionsCount: 0, lastReset: Date())
+        }
+    }
+
+    private func pruneWeeklyStats() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let calendar = Calendar.current
+        let cutoff = calendar.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        weeklyStats = weeklyStats.filter { entry in
+            guard let date = formatter.date(from: entry.dateString) else { return false }
+            return date >= calendar.startOfDay(for: cutoff)
+        }
+        weeklyStats.sort { $0.dateString < $1.dateString }
     }
 
     // MARK: - Process Hook Event
@@ -534,6 +595,11 @@ class SessionManager: ObservableObject {
 
         // 检查是否需要启动/停止 fadeTimer
         updateFadeTimerState()
+    }
+
+    // MARK: - Known CWDs (for hook diagnostic)
+    var knownCwds: [String] {
+        Array(Set(sessions.values.map { $0.cwd }))
     }
 
     // MARK: - Debug

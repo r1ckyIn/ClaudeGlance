@@ -22,6 +22,10 @@ class HUDWindowController: NSWindowController {
     // 窗口可见性状态 - 用于控制动画
     private let windowVisibility = WindowVisibility()
 
+    // 手动隐藏状态：用户通过菜单隐藏后，新会话不会强行弹回
+    var manuallyHidden = false
+    private var idleTimer: Timer?
+
     init(sessionManager: SessionManager) {
         self.sessionManager = sessionManager
 
@@ -142,9 +146,36 @@ class HUDWindowController: NSWindowController {
         sessionManager.$activeSessions
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
-                self?.updateWindowSize(for: sessions)
+                guard let self = self else { return }
+                self.updateWindowSize(for: sessions)
+                self.handleAutoHide(sessions: sessions)
             }
             .store(in: &cancellables)
+    }
+
+    private func handleAutoHide(sessions: [SessionState]) {
+        let autoHideIdle = UserDefaults.standard.bool(forKey: "autoHideIdle")
+        let idleTimeout = UserDefaults.standard.double(forKey: "idleTimeout")
+        let timeout = idleTimeout > 0 ? idleTimeout : 60
+
+        if sessions.isEmpty {
+            if autoHideIdle {
+                // 启动空闲定时器
+                idleTimer?.invalidate()
+                idleTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                    self?.window?.orderOut(nil)
+                }
+            }
+        } else {
+            // 有活跃会话，取消空闲定时器
+            idleTimer?.invalidate()
+            idleTimer = nil
+
+            // 仅在非手动隐藏时自动显示
+            if !manuallyHidden {
+                window?.orderFront(nil)
+            }
+        }
     }
 
     private func updateWindowSize(for sessions: [SessionState]) {
@@ -237,19 +268,18 @@ class WindowVisibility: ObservableObject {
 struct HUDContentView: View {
     @ObservedObject var sessionManager: SessionManager
     @ObservedObject var windowVisibility: WindowVisibility
+    @AppStorage("hudOpacity") private var hudOpacity: Double = 1.0
 
     var body: some View {
         ZStack {
-            // 高斯模糊背景
             VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
 
-            // 边框
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
 
-            // 内容
             if sessionManager.activeSessions.isEmpty {
-                IdleDot(isAnimating: windowVisibility.isVisible)
+                CodeRainEffect()
+                    .opacity(windowVisibility.isVisible ? 0.6 : 0)
             } else {
                 VStack(spacing: 8) {
                     ForEach(sessionManager.activeSessions) { session in
@@ -277,6 +307,7 @@ struct HUDContentView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .opacity(hudOpacity)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: sessionManager.activeSessions.count)
     }
 }
@@ -300,32 +331,3 @@ struct VisualEffectBlur: NSViewRepresentable {
     }
 }
 
-// MARK: - Idle Dot
-struct IdleDot: View {
-    var isAnimating: Bool = true
-    @State private var pulse = false
-
-    var body: some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: [Color.gray.opacity(0.6), Color.gray.opacity(0.2)],
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: 12
-                )
-            )
-            .frame(width: 24, height: 24)
-            .scaleEffect(pulse ? 1.1 : 1.0)
-            .animation(
-                isAnimating
-                    ? .easeInOut(duration: 2.5).repeatForever(autoreverses: true)
-                    : .default,
-                value: pulse
-            )
-            .onAppear { pulse = isAnimating }
-            .onChange(of: isAnimating) { _, newValue in
-                pulse = newValue
-            }
-    }
-}

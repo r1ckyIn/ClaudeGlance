@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import ServiceManagement
 
 @main
 struct ClaudeGlanceApp: App {
@@ -91,6 +92,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessionsStatsItem.isEnabled = false
         menu.addItem(sessionsStatsItem)
 
+        // 7 天趋势
+        menu.addItem(NSMenuItem.separator())
+
+        let trendHeaderItem = NSMenuItem(title: "7-Day Trend", action: nil, keyEquivalent: "")
+        trendHeaderItem.isEnabled = false
+        menu.addItem(trendHeaderItem)
+
+        let trendItem = NSMenuItem(title: "  ▁▁▁▁▁▁▁  (no data)", action: nil, keyEquivalent: "")
+        trendItem.tag = 300
+        trendItem.isEnabled = false
+        menu.addItem(trendItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let sessionsItem = NSMenuItem(title: "Active Sessions: 0", action: nil, keyEquivalent: "")
@@ -99,7 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 服务操作（新增）
+        // 服务操作
         menu.addItem(NSMenuItem(title: "Restart Service", action: #selector(restartService), keyEquivalent: "r"))
         menu.addItem(NSMenuItem.separator())
 
@@ -130,6 +143,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] stats in
                 self?.updateMenuStats(stats)
+            }
+            .store(in: &cancellables)
+
+        // 监听 7 天统计变化
+        sessionManager.$weeklyStats
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] weekly in
+                self?.updateWeeklyTrend(weekly)
             }
             .store(in: &cancellables)
     }
@@ -183,12 +204,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         item.title = title
+        lastServiceHealthy = status.isHealthy
 
-        // 更新菜单栏图标状态（使用九宫格图标，错误时显示警告）
         if let button = statusItem?.button {
             if status.isHealthy {
-                button.image = createGridIcon()
-                button.image?.isTemplate = true
+                // 恢复正常图标（考虑当前会话数）
+                let count = sessionManager.activeSessions.count
+                if count > 0 {
+                    button.image = createGridIconWithBadge(count)
+                    button.image?.isTemplate = false
+                } else {
+                    button.image = createGridIcon()
+                    button.image?.isTemplate = true
+                }
             } else {
                 button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: title)
                 button.image?.isTemplate = false
@@ -196,13 +224,70 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var lastServiceHealthy = true
+
     private func updateMenuSessionCount(_ count: Int) {
         if let menu = statusItem?.menu,
            let item = menu.item(withTag: 100) {
             item.title = "Active Sessions: \(count)"
         }
 
-        // 不再改变图标，始终使用九宫格图标
+        // error 状态时不覆盖警告图标
+        guard lastServiceHealthy, let button = statusItem?.button else { return }
+
+        if count > 0 {
+            button.image = createGridIconWithBadge(count)
+            button.image?.isTemplate = false
+        } else {
+            button.image = createGridIcon()
+            button.image?.isTemplate = true
+        }
+    }
+
+    private func createGridIconWithBadge(_ count: Int) -> NSImage {
+        let size: CGFloat = 18
+        let image = NSImage(size: NSSize(width: size, height: size))
+
+        image.lockFocus()
+
+        // 画 3x3 grid（与 createGridIcon 相同）
+        NSColor.black.setFill()
+        let dotSize: CGFloat = 3.0
+        let spacing: CGFloat = 2.0
+        let totalGridSize = dotSize * 3 + spacing * 2
+        let startX = (size - totalGridSize) / 2
+        let startY = (size - totalGridSize) / 2
+
+        for row in 0..<3 {
+            for col in 0..<3 {
+                let x = startX + CGFloat(col) * (dotSize + spacing)
+                let y = startY + CGFloat(row) * (dotSize + spacing)
+                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: dotSize, height: dotSize)).fill()
+            }
+        }
+
+        // 画徽标
+        let badgeSize: CGFloat = 10
+        let badgeX = size - badgeSize
+        let badgeY = size - badgeSize
+        let badgeRect = NSRect(x: badgeX, y: badgeY, width: badgeSize, height: badgeSize)
+
+        NSColor.systemBlue.setFill()
+        NSBezierPath(ovalIn: badgeRect).fill()
+
+        let text = count > 9 ? "9+" : "\(count)"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: count > 9 ? 6 : 7, weight: .bold),
+            .foregroundColor: NSColor.white
+        ]
+        let attrStr = NSAttributedString(string: text, attributes: attrs)
+        let textSize = attrStr.size()
+        let textX = badgeX + (badgeSize - textSize.width) / 2
+        let textY = badgeY + (badgeSize - textSize.height) / 2
+        attrStr.draw(at: NSPoint(x: textX, y: textY))
+
+        image.unlockFocus()
+        return image
     }
 
     private func updateMenuStats(_ stats: TodayStats) {
@@ -215,6 +300,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let sessionsItem = menu.item(withTag: 102) {
             sessionsItem.title = "  Sessions: \(stats.sessionsCount)"
         }
+    }
+
+    private func updateWeeklyTrend(_ weekly: [DayStats]) {
+        guard let menu = statusItem?.menu,
+              let trendItem = menu.item(withTag: 300) else { return }
+
+        let values = paddedWeekValues(from: weekly)
+        let spark = sparkline(from: values)
+        let todayVal = values.last ?? 0
+        trendItem.title = "  \(spark)  (\(todayVal) today)"
+    }
+
+    private func paddedWeekValues(from weekly: [DayStats]) -> [Int] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let calendar = Calendar.current
+
+        var result: [Int] = []
+        for i in (0..<7).reversed() {
+            let date = calendar.date(byAdding: .day, value: -i, to: Date())!
+            let dateStr = formatter.string(from: date)
+            let calls = weekly.first(where: { $0.dateString == dateStr })?.toolCalls ?? 0
+            result.append(calls)
+        }
+        return result
+    }
+
+    private func sparkline(from values: [Int]) -> String {
+        let bars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+        guard let maxVal = values.max(), maxVal > 0 else {
+            return String(repeating: "▁", count: values.count)
+        }
+        return values.map { val in
+            let index = min(bars.count - 1, Int(Double(val) / Double(maxVal) * Double(bars.count - 1)))
+            return bars[index]
+        }.joined()
     }
 
     // MARK: - HUD Window
@@ -238,124 +359,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Auto Install Hook
     private func autoInstallHookIfNeeded() {
-        // 从 Bundle 中读取脚本
-        guard let bundleScriptURL = Bundle.main.url(
-            forResource: "claude-glance-reporter",
-            withExtension: "sh",
-            subdirectory: "Scripts"
-        ) else {
+        guard let scriptContent = HookInstaller.bundledScriptContent() else {
             print("Hook script not found in bundle, skipping auto-install")
             return
         }
 
         let hooksDir = NSString(string: "~/.claude/hooks").expandingTildeInPath
         let targetPath = (hooksDir as NSString).appendingPathComponent("claude-glance-reporter.sh")
+        let settingsPath = NSString(string: "~/.claude/settings.json").expandingTildeInPath
 
         do {
-            // 创建 hooks 目录
             try FileManager.default.createDirectory(atPath: hooksDir, withIntermediateDirectories: true)
 
-            // 读取 Bundle 中的脚本内容
-            let scriptContent = try String(contentsOf: bundleScriptURL, encoding: .utf8)
-
-            // 检查是否需要更新（比较内容）
-            let needsUpdate: Bool
+            // 1. 脚本更新：比较内容，有变化才写入
+            let needsScriptUpdate: Bool
             if FileManager.default.fileExists(atPath: targetPath) {
                 let existingContent = try String(contentsOfFile: targetPath, encoding: .utf8)
-                needsUpdate = (existingContent != scriptContent)
+                needsScriptUpdate = (existingContent != scriptContent)
             } else {
-                needsUpdate = true
+                needsScriptUpdate = true
             }
 
-            if needsUpdate {
-                // 写入脚本
+            if needsScriptUpdate {
                 try scriptContent.write(toFile: targetPath, atomically: true, encoding: .utf8)
-
-                // 设置可执行权限
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: targetPath)
-
                 print("Hook script installed to: \(targetPath)")
+            }
 
-                // 更新 settings.json
-                updateSettingsJsonWithHook()
+            // 2. settings.json 校验：每次启动都检查，缺条目就补
+            if !HookInstaller.settingsHasAllHooks(at: settingsPath) {
+                try HookInstaller.updateSettingsJson(at: settingsPath)
+                print("Settings.json hooks repaired")
             } else {
-                print("Hook script already up-to-date")
+                print("Hook configuration verified")
             }
         } catch {
             print("Failed to auto-install hook: \(error)")
         }
     }
 
-    private func updateSettingsJsonWithHook() {
-        let settingsPath = NSString(string: "~/.claude/settings.json").expandingTildeInPath
-        let glanceCommand = "claude-glance-reporter.sh"
-        let hookTypes = ["PreToolUse", "PostToolUse", "Notification", "Stop"]
-
-        do {
-            var settings: [String: Any] = [:]
-
-            // 读取现有配置
-            if FileManager.default.fileExists(atPath: settingsPath) {
-                let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
-                if let existingSettings = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    settings = existingSettings
-                }
-            }
-
-            // 获取或创建 hooks 字典
-            var hooks = settings["hooks"] as? [String: Any] ?? [:]
-
-            // 对每个 hook 类型进行智能合并
-            for hookType in hookTypes {
-                let glanceEntry: [String: Any] = [
-                    "matcher": "*",
-                    "hooks": [
-                        ["type": "command", "command": "~/.claude/hooks/claude-glance-reporter.sh \(hookType)"]
-                    ]
-                ]
-
-                if var existingArray = hooks[hookType] as? [[String: Any]] {
-                    // 检查是否已经有 claude-glance-reporter 的配置
-                    let glanceIndex = existingArray.firstIndex { matcher in
-                        guard let hooksList = matcher["hooks"] as? [[String: Any]] else { return false }
-                        return hooksList.contains { hook in
-                            guard let command = hook["command"] as? String else { return false }
-                            return command.contains(glanceCommand)
-                        }
-                    }
-
-                    if let index = glanceIndex {
-                        // 已存在，更新它
-                        existingArray[index] = glanceEntry
-                    } else {
-                        // 不存在，追加到数组末尾
-                        existingArray.append(glanceEntry)
-                    }
-                    hooks[hookType] = existingArray
-                } else {
-                    // 该 hook 类型不存在，创建新数组
-                    hooks[hookType] = [glanceEntry]
-                }
-            }
-
-            settings["hooks"] = hooks
-
-            // 写回文件
-            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: URL(fileURLWithPath: settingsPath))
-
-            print("Settings.json updated successfully")
-        } catch {
-            print("Failed to update settings.json: \(error)")
-        }
-    }
-
     // MARK: - Actions
     @objc func showHUD() {
+        hudWindowController?.manuallyHidden = false
         hudWindowController?.window?.orderFront(nil)
     }
 
     @objc func hideHUD() {
+        hudWindowController?.manuallyHidden = true
         hudWindowController?.window?.orderOut(nil)
     }
 
@@ -365,7 +415,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettings() {
         if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController(ipcServer: ipcServer)
+            settingsWindowController = SettingsWindowController(ipcServer: ipcServer, sessionManager: sessionManager)
         }
         settingsWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -391,12 +441,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Settings Window Controller
 class SettingsWindowController: NSWindowController {
     private var ipcServer: IPCServer?
+    private var sessionManager: SessionManager?
 
-    init(ipcServer: IPCServer? = nil) {
+    init(ipcServer: IPCServer? = nil, sessionManager: SessionManager? = nil) {
         self.ipcServer = ipcServer
+        self.sessionManager = sessionManager
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 450),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -405,7 +457,7 @@ class SettingsWindowController: NSWindowController {
         window.center()
         window.toolbarStyle = .preference
 
-        let hostingView = NSHostingView(rootView: SettingsView(ipcServer: ipcServer))
+        let hostingView = NSHostingView(rootView: SettingsView(ipcServer: ipcServer, sessionManager: sessionManager))
         window.contentView = hostingView
 
         super.init(window: window)
@@ -419,6 +471,7 @@ class SettingsWindowController: NSWindowController {
 // MARK: - Settings View
 struct SettingsView: View {
     var ipcServer: IPCServer?
+    var sessionManager: SessionManager?
 
     var body: some View {
         TabView {
@@ -432,7 +485,10 @@ struct SettingsView: View {
                     Label("Appearance", systemImage: "paintbrush")
                 }
 
-            ConnectionSettingsTab(ipcServer: ipcServer)
+            ConnectionSettingsTab(
+                ipcServer: ipcServer,
+                knownCwds: sessionManager?.knownCwds ?? []
+            )
                 .tabItem {
                     Label("Connection", systemImage: "network")
                 }
@@ -442,14 +498,15 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 480, height: 320)
+        .frame(width: 480, height: 450)
     }
 }
 
 // MARK: - General Settings Tab
 struct GeneralSettingsTab: View {
     @AppStorage("soundEnabled") private var soundEnabled: Bool = true
-    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
+    @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
+    @State private var loginItemError: String?
 
     var body: some View {
         Form {
@@ -463,16 +520,41 @@ struct GeneralSettingsTab: View {
             }
 
             Section {
-                Toggle("Launch at login", isOn: $launchAtLogin)
-                Text("Automatically start Claude Glance when you log in")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle("Launch at login", isOn: Binding(
+                    get: { launchAtLogin },
+                    set: { newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                            launchAtLogin = newValue
+                            loginItemError = nil
+                        } catch {
+                            loginItemError = error.localizedDescription
+                        }
+                    }
+                ))
+
+                if let error = loginItemError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Automatically start Claude Glance when you log in")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Label("Startup", systemImage: "power")
             }
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
+        .onAppear {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 }
 
@@ -533,10 +615,13 @@ struct ConnectionSettingsTab: View {
     @ObservedObject var ipcServer: IPCServer
     @State private var hookStatus: HookStatus = .unknown
     @State private var isCheckingHook = false
+    @State private var diagnostic: HookDiagnostic?
+    @State private var isInstallingForProjects = false
+    var knownCwds: [String]
 
-    init(ipcServer: IPCServer?) {
-        // 使用默认的 IPCServer 如果没有提供
+    init(ipcServer: IPCServer?, knownCwds: [String] = []) {
         self._ipcServer = ObservedObject(wrappedValue: ipcServer ?? IPCServer())
+        self.knownCwds = knownCwds
     }
 
     enum HookStatus {
@@ -544,6 +629,7 @@ struct ConnectionSettingsTab: View {
         case installed
         case notInstalled
         case misconfigured(String)
+        case partialInstall(shadowedBy: [String])
 
         var displayName: String {
             switch self {
@@ -551,6 +637,8 @@ struct ConnectionSettingsTab: View {
             case .installed: return "Installed"
             case .notInstalled: return "Not Installed"
             case .misconfigured(let msg): return "Error: \(msg)"
+            case .partialInstall(let projects):
+                return "Partial (\(projects.count) project\(projects.count == 1 ? "" : "s") shadowed)"
             }
         }
 
@@ -559,6 +647,7 @@ struct ConnectionSettingsTab: View {
             case .unknown: return .orange
             case .installed: return .green
             case .notInstalled, .misconfigured: return .red
+            case .partialInstall: return .yellow
             }
         }
     }
@@ -627,6 +716,44 @@ struct ConnectionSettingsTab: View {
                 Label("Hook Status", systemImage: "terminal")
             }
 
+            // 诊断详情
+            if let diag = diagnostic {
+                Section {
+                    LabeledContent("Script") {
+                        HStack(spacing: 8) {
+                            diagBadge(diag.scriptExists, label: "Exists")
+                            diagBadge(diag.scriptExecutable, label: "Executable")
+                            diagBadge(diag.scriptMatchesBundle, label: "Up-to-date")
+                        }
+                    }
+
+                    LabeledContent("Global Config") {
+                        if diag.globalSettingsOK {
+                            diagBadge(true, label: "All hooks configured")
+                        } else {
+                            Text("Missing: \(diag.globalMissingHooks.joined(separator: ", "))")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    if !diag.shadowedProjects.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Projects with local settings that shadow global hooks:")
+                                .font(.caption)
+                                .foregroundStyle(.yellow)
+                            ForEach(diag.shadowedProjects, id: \.self) { path in
+                                Text(shortenPath(path))
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Label("Diagnostic", systemImage: "stethoscope")
+                }
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -637,11 +764,18 @@ struct ConnectionSettingsTab: View {
 
                         Button("Open Hooks Folder") {
                             let path = NSString(string: "~/.claude/hooks").expandingTildeInPath
-                            // 如果目录不存在，先创建它
                             try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
                             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
                         }
                         .buttonStyle(.bordered)
+                    }
+
+                    if case .partialInstall(let projects) = hookStatus {
+                        Button("Install for \(projects.count) Shadowed Project\(projects.count == 1 ? "" : "s")") {
+                            installForProjects(projects)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isInstallingForProjects)
                     }
 
                     if case .misconfigured(let msg) = hookStatus {
@@ -664,9 +798,12 @@ struct ConnectionSettingsTab: View {
     private func checkHookStatus() {
         isCheckingHook = true
 
+        let cwds = knownCwds
         DispatchQueue.global(qos: .userInitiated).async {
-            let status = HookChecker.checkHookInstallation()
+            let diag = HookChecker.runDiagnostic(knownCwds: cwds)
+            let status = HookChecker.checkHookInstallation(knownCwds: cwds)
             DispatchQueue.main.async {
+                self.diagnostic = diag
                 self.hookStatus = status
                 self.isCheckingHook = false
             }
@@ -678,12 +815,44 @@ struct ConnectionSettingsTab: View {
             DispatchQueue.main.async {
                 switch result {
                 case .success:
-                    self.hookStatus = .installed
+                    self.checkHookStatus()
                 case .failure(let error):
                     self.hookStatus = .misconfigured(error.localizedDescription)
                 }
             }
         }
+    }
+
+    private func installForProjects(_ projects: [String]) {
+        isInstallingForProjects = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            for project in projects {
+                try? HookInstaller.installForProject(at: project)
+            }
+            DispatchQueue.main.async {
+                self.isInstallingForProjects = false
+                self.checkHookStatus()
+            }
+        }
+    }
+
+    private func diagBadge(_ ok: Bool, label: String) -> some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(ok ? Color.green : Color.red)
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func shortenPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 }
 
@@ -703,64 +872,105 @@ struct HookStatusBadge: View {
     }
 }
 
+// MARK: - Hook Diagnostic Info
+struct HookDiagnostic {
+    var scriptExists: Bool = false
+    var scriptExecutable: Bool = false
+    var scriptMatchesBundle: Bool = false
+    var globalSettingsOK: Bool = false
+    var globalMissingHooks: [String] = []
+    var shadowedProjects: [String] = []  // 项目级 settings.json 遮蔽全局 hooks 的项目路径
+}
+
 // MARK: - Hook Checker
 struct HookChecker {
     static func checkHookInstallation() -> ConnectionSettingsTab.HookStatus {
+        let diag = runDiagnostic(knownCwds: [])
+        return statusFromDiagnostic(diag)
+    }
+
+    static func checkHookInstallation(knownCwds: [String]) -> ConnectionSettingsTab.HookStatus {
+        let diag = runDiagnostic(knownCwds: knownCwds)
+        return statusFromDiagnostic(diag)
+    }
+
+    static func runDiagnostic(knownCwds: [String]) -> HookDiagnostic {
+        var diag = HookDiagnostic()
+
         let hooksDir = NSString(string: "~/.claude/hooks").expandingTildeInPath
         let scriptPath = (hooksDir as NSString).appendingPathComponent("claude-glance-reporter.sh")
         let settingsPath = NSString(string: "~/.claude/settings.json").expandingTildeInPath
 
-        // 1. 检查脚本是否存在
-        guard FileManager.default.fileExists(atPath: scriptPath) else {
-            return .notInstalled
+        // 脚本检查
+        diag.scriptExists = FileManager.default.fileExists(atPath: scriptPath)
+        diag.scriptExecutable = FileManager.default.isExecutableFile(atPath: scriptPath)
+
+        if diag.scriptExists, let bundled = HookInstaller.bundledScriptContent() {
+            let existing = (try? String(contentsOfFile: scriptPath, encoding: .utf8)) ?? ""
+            diag.scriptMatchesBundle = (existing == bundled)
         }
 
-        // 2. 检查脚本是否可执行
-        guard FileManager.default.isExecutableFile(atPath: scriptPath) else {
-            return .misconfigured("Script not executable")
-        }
+        // 全局 settings.json 检查
+        diag.globalMissingHooks = HookInstaller.missingHookTypes(at: settingsPath)
+        diag.globalSettingsOK = diag.globalMissingHooks.isEmpty
 
-        // 3. 检查 settings.json 是否配置了 hooks
-        guard FileManager.default.fileExists(atPath: settingsPath) else {
-            return .misconfigured("settings.json not found")
-        }
-
-        do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let hooks = json["hooks"] as? [String: Any] else {
-                return .misconfigured("No hooks configured in settings.json")
-            }
-
-            // 检查是否配置了 claude-glance-reporter
-            let requiredHooks = ["PreToolUse", "PostToolUse", "Notification", "Stop"]
-            for hookName in requiredHooks {
-                guard let hookArray = hooks[hookName] as? [[String: Any]] else {
-                    return .misconfigured("Missing \(hookName) hook")
-                }
-
-                let hasGlanceHook = hookArray.contains { matcher in
-                    guard let hooksList = matcher["hooks"] as? [[String: Any]] else { return false }
-                    return hooksList.contains { hook in
-                        guard let command = hook["command"] as? String else { return false }
-                        return command.contains("claude-glance-reporter")
+        // 项目级遮蔽检查
+        let uniqueCwds = Set(knownCwds)
+        for cwd in uniqueCwds {
+            let projectSettings = findProjectSettings(from: cwd)
+            if let projectPath = projectSettings {
+                // 项目有自己的 settings.json 且该文件有 hooks 字段
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: projectPath)),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   json["hooks"] != nil {
+                    // 项目级有 hooks 字段，检查是否包含 glance hooks
+                    if !HookInstaller.settingsHasAllHooks(at: projectPath) {
+                        diag.shadowedProjects.append(cwd)
                     }
                 }
+            }
+        }
 
-                if !hasGlanceHook {
-                    return .misconfigured("Missing \(hookName) hook for claude-glance")
+        return diag
+    }
+
+    private static func statusFromDiagnostic(_ diag: HookDiagnostic) -> ConnectionSettingsTab.HookStatus {
+        if !diag.scriptExists { return .notInstalled }
+        if !diag.scriptExecutable { return .misconfigured("Script not executable") }
+        if !diag.globalSettingsOK {
+            let missing = diag.globalMissingHooks.joined(separator: ", ")
+            return .misconfigured("Missing hooks: \(missing)")
+        }
+        if !diag.shadowedProjects.isEmpty {
+            return .partialInstall(shadowedBy: diag.shadowedProjects)
+        }
+        return .installed
+    }
+
+    // 从 cwd 向上查找 .claude/settings.json
+    private static func findProjectSettings(from cwd: String) -> String? {
+        var dir = cwd
+        let home = NSHomeDirectory()
+        while dir.count > 1 && dir != home {
+            let candidate = (dir as NSString).appendingPathComponent(".claude/settings.json")
+            if FileManager.default.fileExists(atPath: candidate) {
+                // 排除全局 ~/.claude/settings.json
+                let globalPath = NSString(string: "~/.claude/settings.json").expandingTildeInPath
+                if candidate != globalPath {
+                    return candidate
                 }
             }
-
-            return .installed
-        } catch {
-            return .misconfigured("Failed to read settings: \(error.localizedDescription)")
+            dir = (dir as NSString).deletingLastPathComponent
         }
+        return nil
     }
 }
 
 // MARK: - Hook Installer
 struct HookInstaller {
+    static let glanceCommand = "claude-glance-reporter.sh"
+    static let hookTypes = ["PreToolUse", "PostToolUse", "Notification", "Stop"]
+
     static func install(completion: @escaping (Result<Void, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -772,138 +982,79 @@ struct HookInstaller {
         }
     }
 
+    // 从 Bundle 读取脚本内容（唯一来源）
+    static func bundledScriptContent() -> String? {
+        guard let url = Bundle.main.url(
+            forResource: "claude-glance-reporter",
+            withExtension: "sh",
+            subdirectory: "Scripts"
+        ) else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
     private static func performInstallation() throws {
+        guard let scriptContent = bundledScriptContent() else {
+            throw NSError(domain: "ClaudeGlance", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Hook script not found in app bundle"])
+        }
+
         let hooksDir = NSString(string: "~/.claude/hooks").expandingTildeInPath
         let scriptPath = (hooksDir as NSString).appendingPathComponent("claude-glance-reporter.sh")
         let settingsPath = NSString(string: "~/.claude/settings.json").expandingTildeInPath
 
-        // 1. 创建 hooks 目录
         try FileManager.default.createDirectory(atPath: hooksDir, withIntermediateDirectories: true)
 
-        // 2. 写入 reporter 脚本
-        let scriptContent = generateReporterScript()
         try scriptContent.write(toFile: scriptPath, atomically: true, encoding: .utf8)
-
-        // 3. 设置可执行权限
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
 
-        // 4. 更新 settings.json
         try updateSettingsJson(at: settingsPath)
     }
 
-    private static func generateReporterScript() -> String {
-        return """
-        #!/bin/bash
-        #
-        # claude-glance-reporter.sh
-        # Claude Glance Hook Reporter (Auto-generated)
-        #
-
-        set -e
-
-        GLANCE_SOCKET="/tmp/claude-glance.sock"
-        GLANCE_HTTP="http://localhost:19847/api/status"
-        PROTOCOL_VERSION=1
-
-        get_session_id() {
-            if [[ -n "$CLAUDE_SESSION_ID" ]]; then
-                echo "$CLAUDE_SESSION_ID"
-                return
-            fi
-
-            if command -v md5 &> /dev/null; then
-                tty 2>/dev/null | md5 | head -c 8
-            elif command -v md5sum &> /dev/null; then
-                tty 2>/dev/null | md5sum | head -c 8
-            else
-                echo "session-$$"
-            fi
+    // 检查指定 settings.json 是否已包含所有 glance hooks
+    static func settingsHasAllHooks(at path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = json["hooks"] as? [String: Any] else {
+            return false
         }
 
-        get_terminal_name() {
-            if [[ -n "$TERM_PROGRAM" ]]; then
-                echo "$TERM_PROGRAM"
-            elif [[ -n "$TERMINAL_EMULATOR" ]]; then
-                echo "$TERMINAL_EMULATOR"
-            elif [[ -n "$ITERM_SESSION_ID" ]]; then
-                echo "iTerm2"
-            else
-                echo "Terminal"
-            fi
+        for hookType in hookTypes {
+            guard let hookArray = hooks[hookType] as? [[String: Any]] else { return false }
+            let hasGlance = hookArray.contains { matcher in
+                guard let hooksList = matcher["hooks"] as? [[String: Any]] else { return false }
+                return hooksList.contains { hook in
+                    (hook["command"] as? String)?.contains(glanceCommand) == true
+                }
+            }
+            if !hasGlance { return false }
         }
-
-        main() {
-            local hook_event="$1"
-            local hook_input
-            hook_input=$(cat)
-
-            if [[ -z "$hook_input" ]]; then
-                hook_input="{}"
-            fi
-
-            local session_id
-            session_id=$(get_session_id)
-
-            local terminal_name
-            terminal_name=$(get_terminal_name)
-
-            local project_name
-            project_name=$(basename "$(pwd)")
-
-            local cwd
-            cwd=$(pwd)
-
-            local timestamp
-            timestamp=$(date +%s%3N 2>/dev/null || date +%s)
-
-            local payload
-            payload=$(cat <<EOF
-        {
-          "protocol_version": $PROTOCOL_VERSION,
-          "session_id": "$session_id",
-          "terminal": "$terminal_name",
-          "project": "$project_name",
-          "cwd": "$cwd",
-          "timestamp": $timestamp,
-          "event": "$hook_event",
-          "data": $hook_input
-        }
-        EOF
-        )
-
-            send_to_hud "$payload"
-        }
-
-        send_to_hud() {
-            local payload="$1"
-
-            if [[ -S "$GLANCE_SOCKET" ]]; then
-                echo "$payload" | nc -U "$GLANCE_SOCKET" 2>/dev/null && return 0
-            fi
-
-            if command -v curl &> /dev/null; then
-                curl -s -X POST "$GLANCE_HTTP" \\
-                    -H "Content-Type: application/json" \\
-                    -d "$payload" \\
-                    --connect-timeout 1 \\
-                    --max-time 2 \\
-                    2>/dev/null || true
-            fi
-        }
-
-        main "$@"
-
-        exit 0
-        """
+        return true
     }
 
-    private static func updateSettingsJson(at path: String) throws {
-        let glanceCommand = "claude-glance-reporter.sh"
-        let hookTypes = ["PreToolUse", "PostToolUse", "Notification", "Stop"]
+    // 返回 settings.json 中缺失的 hook 类型
+    static func missingHookTypes(at path: String) -> [String] {
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = json["hooks"] as? [String: Any] else {
+            return hookTypes
+        }
 
+        return hookTypes.filter { hookType in
+            guard let hookArray = hooks[hookType] as? [[String: Any]] else { return true }
+            return !hookArray.contains { matcher in
+                guard let hooksList = matcher["hooks"] as? [[String: Any]] else { return false }
+                return hooksList.contains { hook in
+                    (hook["command"] as? String)?.contains(glanceCommand) == true
+                }
+            }
+        }
+    }
+
+    static func updateSettingsJson(at path: String) throws {
         var settings: [String: Any] = [:]
 
-        // 读取现有配置
         if FileManager.default.fileExists(atPath: path) {
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
             if let existingSettings = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -911,10 +1062,8 @@ struct HookInstaller {
             }
         }
 
-        // 获取或创建 hooks 字典
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
 
-        // 对每个 hook 类型进行智能合并
         for hookType in hookTypes {
             let glanceEntry: [String: Any] = [
                 "matcher": "*",
@@ -924,40 +1073,36 @@ struct HookInstaller {
             ]
 
             if var existingArray = hooks[hookType] as? [[String: Any]] {
-                // 检查是否已经有 claude-glance-reporter 的配置
                 let glanceIndex = existingArray.firstIndex { matcher in
                     guard let hooksList = matcher["hooks"] as? [[String: Any]] else { return false }
                     return hooksList.contains { hook in
-                        guard let command = hook["command"] as? String else { return false }
-                        return command.contains(glanceCommand)
+                        (hook["command"] as? String)?.contains(glanceCommand) == true
                     }
                 }
 
                 if let index = glanceIndex {
-                    // 已存在，更新它
                     existingArray[index] = glanceEntry
                 } else {
-                    // 不存在，追加到数组末尾（不影响用户现有的 hooks）
                     existingArray.append(glanceEntry)
                 }
                 hooks[hookType] = existingArray
             } else {
-                // 该 hook 类型不存在，创建新数组
                 hooks[hookType] = [glanceEntry]
             }
         }
 
         settings["hooks"] = hooks
 
-        // 备份原文件
-        if FileManager.default.fileExists(atPath: path) {
-            let backupPath = path + ".backup.\(Int(Date().timeIntervalSince1970))"
-            try? FileManager.default.copyItem(atPath: path, toPath: backupPath)
-        }
-
-        // 写回文件
         let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: URL(fileURLWithPath: path))
+    }
+
+    // 为指定项目目录安装 hooks
+    static func installForProject(at projectDir: String) throws {
+        let settingsPath = (projectDir as NSString).appendingPathComponent(".claude/settings.json")
+        if FileManager.default.fileExists(atPath: settingsPath) {
+            try updateSettingsJson(at: settingsPath)
+        }
     }
 }
 
@@ -1006,7 +1151,7 @@ struct AboutSettingsTab: View {
                     .font(.title)
                     .fontWeight(.semibold)
 
-                Text("Version 1.2")
+                Text("Version 1.3")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

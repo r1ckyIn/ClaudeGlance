@@ -41,12 +41,19 @@ A native macOS application that provides a real-time floating HUD (Heads-Up Disp
 - **Real-time Status Display** - See if Claude is reading, writing, thinking, or waiting
 - **Pixel Art Animations** - Beautiful 4x4 pixel grid with unique animations for each state
 - **Auto-Install Hooks** - Hook scripts are bundled and automatically configured on first launch
+- **Robust Hook Management** - Auto-repairs settings.json on every launch, detects project-level config shadowing
+- **Hook Diagnostic Panel** - Detailed diagnostics in Settings: script status, global config, shadowed projects
 - **Service Status Monitoring** - Built-in service health indicator in menu bar
+- **Menu Bar Session Badge** - Active session count displayed on the menu bar icon
+- **7-Day Statistics** - Rolling weekly stats with sparkline trend in menu bar dropdown
+- **Code Rain Effect** - Matrix-style particle animation on idle HUD
+- **Clickable Project Path** - Click project name in session card to open in Finder
+- **HUD Opacity Control** - Adjustable HUD transparency
+- **Auto-Hide with Manual Override** - HUD auto-hides when idle; manual hide won't be overridden by new sessions
+- **Launch at Login** - Proper macOS login item integration via SMAppService
 - **High Contrast Display** - Optimized for both light and dark desktop backgrounds
 - **Fluid Window** - Automatically scales based on active session count
 - **Always On Top** - Floating window stays visible above all other windows
-- **Menu Bar Integration** - Quick access through the menu bar icon
-- **Today's Statistics** - Track tool calls and sessions count
 
 ## Status Indicators
 
@@ -261,7 +268,8 @@ The HUD uses a high-contrast dark background that works on both light and dark d
 
 | Icon | Meaning |
 |------|---------|
-| ●●● (3x3 grid) | Service running normally |
+| ●●● (3x3 grid) | Service running, no active sessions |
+| ●●● + blue badge | Active sessions (number shown) |
 | ⚠️ | Service error - try "Restart Service" |
 
 ## License
@@ -288,12 +296,19 @@ Created by **Kim**
 - **实时状态显示** - 查看 Claude 正在读取、写入、思考还是等待
 - **像素艺术动画** - 4x4 像素网格，不同状态展示不同动画效果
 - **自动安装 Hooks** - 首次启动时自动配置 hook 脚本，无需手动设置
+- **健壮的 Hook 管理** - 每次启动自动修复 settings.json，检测项目级配置遮蔽
+- **Hook 诊断面板** - 设置中详细诊断：脚本状态、全局配置、被遮蔽的项目
 - **服务状态监控** - 菜单栏显示服务健康状态
+- **菜单栏会话徽标** - 菜单栏图标上显示活跃会话数
+- **7 天统计趋势** - 菜单栏下拉中显示 sparkline 周趋势
+- **代码雨特效** - 空闲时 HUD 显示 Matrix 风格粒子动画
+- **可点击项目路径** - 点击会话卡片项目名在 Finder 中打开
+- **HUD 透明度控制** - 可调节 HUD 透明度
+- **智能自动隐藏** - 空闲时自动隐藏 HUD；手动隐藏不会被新会话覆盖
+- **开机自启** - 通过 SMAppService 实现 macOS 原生登录项
 - **高对比度显示** - 优化背景对比度，支持浅色和深色桌面
 - **流体窗口** - 根据活动会话数量自动伸缩
 - **始终置顶** - 悬浮窗口不会被其他窗口遮挡
-- **菜单栏集成** - 通过菜单栏图标快速控制
-- **今日统计** - 追踪工具调用次数和会话数量
 
 ## 状态指示
 

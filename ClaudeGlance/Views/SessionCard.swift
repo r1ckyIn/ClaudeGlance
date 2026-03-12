@@ -9,11 +9,12 @@ import SwiftUI
 
 struct SessionCard: View {
     let session: SessionState
-    var isAnimating: Bool = true  // 控制动画开关
+    var isAnimating: Bool = true
     var onTap: (() -> Void)?
-    var onDismiss: (() -> Void)?  // 手动关闭回调
+    var onDismiss: (() -> Void)?
 
     @State private var animatedStatus: SessionStatus = .idle
+    @AppStorage("showToolHistory") private var showToolHistory: Bool = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,6 +48,11 @@ struct SessionCard: View {
                         Text(session.project)
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.6))
+                            .underline(color: .white.opacity(0.2))
+                            .onTapGesture {
+                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: session.cwd)
+                            }
+                            .help(session.cwd)
 
                         if !session.metadata.isEmpty && !session.isStillWaiting {
                             Text("·")
@@ -80,7 +86,7 @@ struct SessionCard: View {
                 Spacer()
 
                 // 展开指示器
-                if !session.toolHistory.isEmpty {
+                if showToolHistory && !session.toolHistory.isEmpty {
                     Image(systemName: session.isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.4))
@@ -110,7 +116,7 @@ struct SessionCard: View {
             }
 
             // 展开的详情面板
-            if session.isExpanded && !session.toolHistory.isEmpty {
+            if showToolHistory && session.isExpanded && !session.toolHistory.isEmpty {
                 ToolHistoryPanel(history: session.toolHistory)
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .move(edge: .top)),
