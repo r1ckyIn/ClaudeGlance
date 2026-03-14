@@ -73,6 +73,7 @@ class SessionManager: ObservableObject {
 
     // 记录每个会话的最后 Stop 时间，用于 5 秒静默期
     private var sessionStopTimes: [String: Date] = [:]
+    private var lastNotificationTime: [NotificationSoundType: Date] = [:]
 
     private var cleanupTimer: Timer?
     private var fadeTimer: Timer?
@@ -421,6 +422,13 @@ class SessionManager: ObservableObject {
     }
 
     private func playNotificationSound(_ type: NotificationSoundType) {
+        // 同类型通知 10 秒内不重复
+        let now = Date()
+        if let last = lastNotificationTime[type], now.timeIntervalSince(last) < 10 {
+            return
+        }
+        lastNotificationTime[type] = now
+
         // Sound notification
         if UserDefaults.standard.bool(forKey: "soundEnabled") {
             let soundName: NSSound.Name
@@ -449,8 +457,9 @@ class SessionManager: ObservableObject {
                 content.title = "Claude Completed"
                 content.body = "A Claude session finished its task"
             }
+            let notificationId = type == .attention ? "claude-glance-attention" : "claude-glance-completion"
             let request = UNNotificationRequest(
-                identifier: UUID().uuidString,
+                identifier: notificationId,
                 content: content,
                 trigger: nil
             )
