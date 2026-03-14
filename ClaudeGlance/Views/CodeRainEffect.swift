@@ -9,32 +9,40 @@ import SwiftUI
 
 struct CodeRainEffect: View {
     @State private var particles: [CodeParticle] = []
+    @State private var canvasSize: CGSize = .zero
     private let maxParticles = 30
 
     private let characters = ["0", "1", "{", "}", ";", "=", "→", "<", ">", "/", "*", "+"]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.05)) { timeline in
-            Canvas { context, size in
-                updateParticles(size: size, date: timeline.date)
+        GeometryReader { geo in
+            TimelineView(.animation(minimumInterval: 0.05)) { timeline in
+                Canvas { context, size in
+                    for particle in particles {
+                        let text = Text(particle.character)
+                            .font(.system(size: particle.size, design: .monospaced))
+                            .foregroundColor(.green)
 
-                for particle in particles {
-                    let text = Text(particle.character)
-                        .font(.system(size: particle.size, design: .monospaced))
-                        .foregroundColor(.green)
-
-                    context.opacity = particle.opacity
-                    context.draw(
-                        text,
-                        at: CGPoint(x: particle.x, y: particle.y)
-                    )
+                        context.opacity = particle.opacity
+                        context.draw(
+                            text,
+                            at: CGPoint(x: particle.x, y: particle.y)
+                        )
+                    }
+                }
+                .onChange(of: timeline.date) { _, _ in
+                    updateParticles()
                 }
             }
+            .onAppear { canvasSize = geo.size }
+            .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
         }
     }
 
-    private func updateParticles(size: CGSize, date: Date) {
-        // 移动现有粒子
+    private func updateParticles() {
+        let size = canvasSize
+        guard size.width > 0, size.height > 0 else { return }
+
         particles = particles.compactMap { particle in
             var p = particle
             p.y += p.speed
@@ -46,7 +54,6 @@ struct CodeRainEffect: View {
             return p
         }
 
-        // 随机添加新粒子
         if particles.count < maxParticles && Int.random(in: 0...3) == 0 {
             let newParticle = CodeParticle(
                 character: characters.randomElement()!,
