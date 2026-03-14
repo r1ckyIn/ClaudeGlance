@@ -188,7 +188,15 @@ class HUDWindowController: NSWindowController {
             let cardHeight: CGFloat = 56
             let padding: CGFloat = 16
             let spacing: CGFloat = 8
-            let height = padding + CGFloat(sessions.count) * cardHeight + CGFloat(max(0, sessions.count - 1)) * spacing
+            var height: CGFloat = padding
+            for (idx, session) in sessions.enumerated() {
+                height += cardHeight
+                if session.isExpanded && !session.toolHistory.isEmpty {
+                    let rows = CGFloat(min(session.toolHistory.count, 5))
+                    height += 17 + rows * 20
+                }
+                if idx < sessions.count - 1 { height += spacing }
+            }
             newSize = NSSize(width: 320, height: height)
         }
 
