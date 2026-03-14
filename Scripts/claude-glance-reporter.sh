@@ -77,21 +77,38 @@ main() {
     local timestamp
     timestamp=$(date +%s%3N 2>/dev/null || date +%s)
 
-    # 构建 JSON payload
+    # 构建 JSON payload（通过环境变量传入 python3 安全编码）
+    if ! command -v python3 &>/dev/null; then
+        exit 0
+    fi
+
     local payload
-    payload=$(cat <<EOF
-{
-  "protocol_version": $PROTOCOL_VERSION,
-  "session_id": "$session_id",
-  "terminal": "$terminal_name",
-  "project": "$project_name",
-  "cwd": "$cwd",
-  "timestamp": $timestamp,
-  "event": "$hook_event",
-  "data": $hook_input
-}
-EOF
-)
+    payload=$(
+        _GLANCE_SID="$session_id" \
+        _GLANCE_TERM="$terminal_name" \
+        _GLANCE_PROJ="$project_name" \
+        _GLANCE_CWD="$cwd" \
+        _GLANCE_EVT="$hook_event" \
+        _GLANCE_INPUT="$hook_input" \
+        _GLANCE_TS="$timestamp" \
+        _GLANCE_PROTO="$PROTOCOL_VERSION" \
+        python3 -c '
+import json, os
+e = os.environ.get
+try: data = json.loads(e("_GLANCE_INPUT", "{}"))
+except Exception: data = {}
+print(json.dumps({
+    "protocol_version": int(e("_GLANCE_PROTO", "1")),
+    "session_id": e("_GLANCE_SID", ""),
+    "terminal": e("_GLANCE_TERM", "Terminal"),
+    "project": e("_GLANCE_PROJ", ""),
+    "cwd": e("_GLANCE_CWD", ""),
+    "timestamp": int(e("_GLANCE_TS", "0")),
+    "event": e("_GLANCE_EVT", ""),
+    "data": data,
+}))
+'
+    )
 
     # 发送到 HUD
     send_to_hud "$payload"
