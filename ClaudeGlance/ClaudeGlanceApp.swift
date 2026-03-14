@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import ServiceManagement
+import UserNotifications
 
 @main
 struct ClaudeGlanceApp: App {
@@ -23,7 +24,7 @@ struct ClaudeGlanceApp: App {
 }
 
 // MARK: - App Delegate
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem?
     var hudWindowController: HUDWindowController?
     var settingsWindowController: SettingsWindowController?
@@ -40,6 +41,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         startIPCServer()
 
+        // 请求通知权限
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
         // 隐藏 Dock 图标
         NSApp.setActivationPolicy(.accessory)
     }
@@ -52,6 +57,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 退出时清理资源
     func applicationWillTerminate(_ notification: Notification) {
         ipcServer.stop()
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 
     // MARK: - Menu Bar
@@ -505,6 +517,7 @@ struct SettingsView: View {
 // MARK: - General Settings Tab
 struct GeneralSettingsTab: View {
     @AppStorage("soundEnabled") private var soundEnabled: Bool = true
+    @AppStorage("notificationsEnabled") private var notificationsEnabled: Bool = true
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
     @State private var loginItemError: String?
 
@@ -513,6 +526,11 @@ struct GeneralSettingsTab: View {
             Section {
                 Toggle("Enable sound notifications", isOn: $soundEnabled)
                 Text("Play sounds when Claude needs input or completes a task")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Enable macOS notifications", isOn: $notificationsEnabled)
+                Text("Show notification banners in Notification Center")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -1151,7 +1169,7 @@ struct AboutSettingsTab: View {
                     .font(.title)
                     .fontWeight(.semibold)
 
-                Text("Version 1.3")
+                Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

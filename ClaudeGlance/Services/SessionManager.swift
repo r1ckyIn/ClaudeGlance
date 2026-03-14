@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import AppKit
+import UserNotifications
 
 // MARK: - UserDefaults Extension
 extension UserDefaults {
@@ -435,20 +436,40 @@ class SessionManager: ObservableObject {
     }
 
     private func playNotificationSound(_ type: NotificationSoundType) {
-        guard soundEnabled else { return }
+        // Sound notification
+        if UserDefaults.standard.bool(forKey: "soundEnabled") {
+            let soundName: NSSound.Name
+            switch type {
+            case .attention:
+                soundName = NSSound.Name("Ping")
+            case .completion:
+                soundName = NSSound.Name("Hero")
+            }
 
-        let soundName: NSSound.Name
-        switch type {
-        case .attention:
-            soundName = NSSound.Name("Ping")
-        case .completion:
-            soundName = NSSound.Name("Hero")
+            if let sound = NSSound(named: soundName) {
+                sound.play()
+            } else {
+                NSSound.beep()
+            }
         }
 
-        if let sound = NSSound(named: soundName) {
-            sound.play()
-        } else {
-            NSSound.beep()
+        // macOS Notification Center
+        if UserDefaults.standard.bool(forKey: "notificationsEnabled") {
+            let content = UNMutableNotificationContent()
+            switch type {
+            case .attention:
+                content.title = "Claude Needs Input"
+                content.body = "A Claude session is waiting for your response"
+            case .completion:
+                content.title = "Claude Completed"
+                content.body = "A Claude session finished its task"
+            }
+            let request = UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request)
         }
     }
 
