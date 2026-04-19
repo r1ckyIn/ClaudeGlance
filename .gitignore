@@ -1,3 +1,6 @@
+# VHS local-only output (tape is committed for reproducibility; GIF is local)
+demo-cli.gif
+
 # Xcode
 build/
 DerivedData/

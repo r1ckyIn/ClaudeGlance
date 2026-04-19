@@ -31,6 +31,10 @@
   <img src="demo.gif" width="500" alt="Claude Glance Demo">
 </p>
 
+<p align="center">
+  <em>GIF: Kap recording of the menu-bar interface. CLI-launch portion reproducible via <code>vhs demo.tape</code>.</em>
+</p>
+
 ---
 
 A native macOS application that provides a real-time floating HUD (Heads-Up Display) to monitor multiple Claude Code terminal sessions simultaneously.
@@ -274,6 +278,10 @@ The HUD uses a high-contrast dark background that works on both light and dark d
 | ●●● (3x3 grid) | Service running, no active sessions |
 | ●●● + blue badge | Active sessions (number shown) |
 | ⚠️ | Service error - try "Restart Service" |
+
+### Why Story
+
+Claude Glance exists because I had no passive signal that Claude Code was active — sessions would run while I context-switched, and I'd return minutes later having missed a permission prompt or a completed task. The menu-bar HUD gives one-glance status without opening the terminal. Built as a learning exercise in Swift + macOS native menu-bar APIs; the broader story is about paying attention to where AI-agent invisibility creates friction in developer workflows, and solving that locally (no telemetry, no uploads) with a tiny native UI.
 
 ## License
 
